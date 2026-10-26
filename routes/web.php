@@ -41,6 +41,9 @@ Route::prefix('bms-homepage')->name('homepage.')->group(function () {
     // Real-Time OPD Queue Congestion Heatmap API
     Route::get('/queue-heatmap', [BmsHomepageController::class, 'getQueueHeatmap'])->name('queue-heatmap');
 
+    // Appointment (oapp) summary by clinic and doctor for a selected date
+    Route::get('/appointments', [BmsHomepageController::class, 'getAppointments'])->name('appointments');
+
     // HOSxP Clinic Service Workload Statistics API (Dynamic Thai Calendar Date Selection)
     Route::get('/clinic-stats', [BmsHomepageController::class, 'getClinicStats'])->name('clinic-stats');
 

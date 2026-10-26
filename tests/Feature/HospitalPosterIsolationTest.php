@@ -479,4 +479,79 @@ class HospitalPosterIsolationTest extends TestCase
         $this->post('/bms-homepage/admin/login', ['login_name' => 'nurse', 'password' => 'right'])
             ->assertSessionHasErrors('login_name');
     }
+
+    /**
+     * Test appointments are grouped by clinic with doctor breakdown for the selected date.
+     */
+    public function test_appointments_api_groups_by_clinic_and_doctor(): void
+    {
+        $seenDate = null;
+        $this->fakeHosxpDatabase(function (string $sql, array $params) use (&$seenDate): array {
+            $seenDate = $params['next_date'] ?? null;
+
+            return [
+                ['clinic' => 'เบาหวาน', 'doctor' => 'พญ.ก', 'oapp' => 28],
+                ['clinic' => 'เบาหวาน', 'doctor' => 'พญ.ข', 'oapp' => 24],
+                ['clinic' => 'ความดัน', 'doctor' => null, 'oapp' => 5],
+                ['clinic' => null, 'doctor' => 'นพ.ค', 'oapp' => 1],
+            ];
+        });
+
+        $this->getJson('/bms-homepage/appointments?date=2026-10-27')
+            ->assertOk()
+            ->assertJsonPath('success', true)
+            ->assertJsonPath('selected_date', '2026-10-27')
+            ->assertJsonPath('total', 58)
+            ->assertJsonPath('clinics.0.name', 'เบาหวาน')
+            ->assertJsonPath('clinics.0.total', 52)
+            ->assertJsonPath('clinics.0.doctors.1.name', 'พญ.ข')
+            ->assertJsonPath('clinics.1.doctors.0.name', 'ไม่ระบุแพทย์')
+            ->assertJsonPath('clinics.2.name', 'ไม่ระบุคลินิก');
+
+        $this->assertSame('2026-10-27', $seenDate);
+    }
+
+    /**
+     * Test appointments API validates the date and reports database failures.
+     */
+    public function test_appointments_api_validates_date_and_reports_database_error(): void
+    {
+        $this->getJson('/bms-homepage/appointments?date=not-a-date')->assertUnprocessable();
+
+        $this->getJson('/bms-homepage/appointments?date=2026-10-27')
+            ->assertOk()
+            ->assertJsonPath('success', false)
+            ->assertJsonPath('total', 0);
+    }
+
+    /**
+     * Test the homepage ships today's appointment summary for the first card.
+     */
+    public function test_homepage_provides_todays_appointment_summary(): void
+    {
+        $this->fakeHosxpDatabase(fn (string $sql): array => str_contains($sql, 'FROM oapp')
+            ? [['clinic' => 'เบาหวาน', 'doctor' => 'พญ.ก', 'oapp' => 7]]
+            : []);
+
+        $this->get('/bms-homepage?hcode=10989')
+            ->assertInertia(fn ($page) => $page
+                ->where('appointmentData.total', 7)
+                ->where('appointmentData.selected_date', now()->format('Y-m-d'))
+            );
+    }
+
+    /**
+     * Test the history-taking department is displayed as "ตรวจโรคทั่วไป".
+     */
+    public function test_clinic_stats_renames_history_taking_department(): void
+    {
+        $this->fakeHosxpDatabase(fn (string $sql): array => str_contains($sql, 'COUNT(*) AS total')
+            ? [['total' => 10]]
+            : [['name' => 'จุดซักประวัติผู้ป่วยนอก', 'count' => 7], ['name' => 'ทันตกรรม', 'count' => 3]]);
+
+        $this->getJson('/bms-homepage/clinic-stats?date=2026-10-26')
+            ->assertOk()
+            ->assertJsonPath('departments.0.name', 'ตรวจโรคทั่วไป')
+            ->assertJsonPath('departments.1.name', 'ทันตกรรม');
+    }
 }

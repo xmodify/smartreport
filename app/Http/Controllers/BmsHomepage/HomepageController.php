@@ -98,6 +98,7 @@ class HomepageController extends Controller
             'hospitalName' => $hospitalName,
             'hosxpData' => $hosxpData,
             'wardCensus' => $this->fetchWardCensus(),
+            'appointmentData' => $this->fetchAppointmentData(now()->format('Y-m-d')),
             'clinicStats' => $clinicStats,
             'realtimeData' => $realtimeData,
             'queueHeatmap' => $queueHeatmap,
@@ -230,6 +231,74 @@ class HomepageController extends Controller
     }
 
     /**
+     * API endpoint to fetch appointments (oapp) grouped by clinic and doctor for a date.
+     */
+    public function getAppointments(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'date' => ['nullable', 'date_format:Y-m-d'],
+        ]);
+
+        return response()->json($this->fetchAppointmentData($validated['date'] ?? now()->format('Y-m-d')));
+    }
+
+    /**
+     * Fetch appointment counts per clinic and doctor for an appointment date (oapp.nextdate).
+     *
+     * @return array<string, mixed>
+     */
+    public function fetchAppointmentData(string $date): array
+    {
+        $thaiDate = Carbon::parse($date)->locale('th')->translatedFormat('j M ').((int) Carbon::parse($date)->format('Y') + 543);
+
+        $sql = 'SELECT c.name AS clinic, d.name AS doctor, COUNT(o.vn) AS oapp
+                FROM oapp o
+                LEFT JOIN clinic c ON c.clinic = o.clinic
+                LEFT JOIN doctor d ON d.code = o.doctor
+                WHERE o.nextdate = :next_date
+                GROUP BY o.clinic, o.doctor, c.name, d.name
+                ORDER BY oapp DESC';
+
+        try {
+            $rows = $this->hosxp->select($sql, ['next_date' => $date], 1000);
+        } catch (\Throwable $e) {
+            Log::warning('HOSxP appointment query failed: '.$e->getMessage());
+
+            return [
+                'success' => false,
+                'error' => self::DB_ERROR_MESSAGE,
+                'selected_date' => $date,
+                'thai_date' => $thaiDate,
+                'total' => 0,
+                'clinics' => [],
+            ];
+        }
+
+        $clinics = [];
+        $total = 0;
+        foreach ($rows as $row) {
+            $clinicName = (string) ($row['clinic'] ?? null ?: 'ไม่ระบุคลินิก');
+            $count = (int) ($row['oapp'] ?? 0);
+
+            $clinics[$clinicName] ??= ['name' => $clinicName, 'total' => 0, 'doctors' => []];
+            $clinics[$clinicName]['doctors'][] = [
+                'name' => (string) ($row['doctor'] ?? null ?: 'ไม่ระบุแพทย์'),
+                'count' => $count,
+            ];
+            $clinics[$clinicName]['total'] += $count;
+            $total += $count;
+        }
+
+        return [
+            'success' => true,
+            'selected_date' => $date,
+            'thai_date' => $thaiDate,
+            'total' => $total,
+            'clinics' => array_values($clinics),
+        ];
+    }
+
+    /**
      * API endpoint to fetch HOSxP Clinic Service Workload Statistics dynamically by date.
      */
     public function getClinicStats(Request $request): JsonResponse
@@ -311,7 +380,7 @@ class HomepageController extends Controller
             $count = (int) ($r['waiting_count'] ?? 0);
             $totalWaiting += $count;
             $formattedDepartments[] = [
-                'name' => (string) ($r['department'] ?? 'ไม่ระบุแผนก'),
+                'name' => $this->displayDepartmentName($r['department'] ?? null, 'ไม่ระบุแผนก'),
                 'depcode' => (string) ($r['depcode'] ?? ''),
                 'count' => $count,
                 'status' => $count >= 30 ? 'หนาแน่น' : ($count >= 15 ? 'ปานกลาง' : 'ปกติ'),
@@ -374,7 +443,7 @@ class HomepageController extends Controller
         $maxCell = 0;
 
         foreach ($rawRows as $row) {
-            $dept = (string) ($row['department'] ?? 'ไม่ระบุจุดบริการ');
+            $dept = $this->displayDepartmentName($row['department'] ?? null, 'ไม่ระบุจุดบริการ');
             $hr = (int) ($row['hr'] ?? 0);
             $q = (int) ($row['q'] ?? 0);
 
@@ -466,7 +535,7 @@ class HomepageController extends Controller
                 $count = (int) ($row['count'] ?? 0);
 
                 return [
-                    'name' => (string) ($row['name'] ?? 'ไม่ระบุชื่อคลินิก'),
+                    'name' => $this->displayDepartmentName($row['name'] ?? null, 'ไม่ระบุชื่อคลินิก'),
                     'count' => $count,
                     'percent' => $maxCount > 0 ? (int) round(($count / $maxCount) * 100) : 0,
                     'share' => $totalOpd > 0 ? round(($count / $totalOpd) * 100, 1) : 0,
@@ -494,6 +563,18 @@ class HomepageController extends Controller
                 'departments' => [],
             ];
         }
+    }
+
+    /**
+     * Department name shown on the page, applying homepage.department_aliases.
+     */
+    protected function displayDepartmentName(?string $name, string $fallback): string
+    {
+        if ($name === null || $name === '') {
+            return $fallback;
+        }
+
+        return (string) (config('homepage.department_aliases', [])[$name] ?? $name);
     }
 
     /**

@@ -4,6 +4,7 @@ import { Head, Link, router } from '@inertiajs/vue3';
 import { appPath } from '../../helpers';
 import PosterManagerModal from './Components/PosterManagerModal.vue';
 import AdminLoginModal from './Components/AdminLoginModal.vue';
+import AppointmentModal from './Components/AppointmentModal.vue';
 import ClinicWorkloadCard from './Components/ClinicWorkloadCard.vue';
 import { 
   Building2, 
@@ -53,6 +54,10 @@ const props = defineProps({
   wardCensus: {
     type: Array,
     default: () => [],
+  },
+  appointmentData: {
+    type: Object,
+    default: () => ({}),
   },
   hosxpData: {
     type: Object,
@@ -107,6 +112,9 @@ const isFullscreen = ref(false);
 
 // HOSxP Admin Poster Manager Modal State
 const isPosterManagerOpen = ref(false);
+
+// Appointment Modal State
+const isAppointmentOpen = ref(false);
 
 // HOSxP Administrator Login Modal State
 const isAdminLoginOpen = ref(false);
@@ -226,7 +234,19 @@ onUnmounted(() => {
           </div>
 
           <!-- Quick Stat KPI Boxes (HOSxP Delphi Style) -->
-          <div class="grid grid-cols-3 gap-2">
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <!-- Appointments (click for details) -->
+            <button
+              type="button"
+              class="bg-[#eff6ff] border border-[#bfdbfe] p-2.5 rounded-lg text-center shadow-xs cursor-pointer hover:bg-[#e0edff] transition-colors"
+              title="คลิกเพื่อดูรายละเอียดนัดหมายตามคลินิกและแพทย์"
+              @click="isAppointmentOpen = true"
+            >
+              <div class="text-[11px] font-semibold text-[#1d4ed8] mb-0.5 truncate">นัดหมาย</div>
+              <div class="text-2xl font-black text-[#1e40af]">{{ appointmentData.total ?? 0 }}</div>
+              <div class="text-[10px] text-[#1d4ed8] font-sarabun">ราย (นัด {{ appointmentData.thai_date }})</div>
+            </button>
+
             <div
               v-for="(ward, index) in wardCensus"
               :key="ward.ward"
@@ -446,6 +466,12 @@ onUnmounted(() => {
       @close="isPosterManagerOpen = false"
     />
 
+
+    <AppointmentModal
+      :is-open="isAppointmentOpen"
+      :initial-data="appointmentData"
+      @close="isAppointmentOpen = false"
+    />
 
     <AdminLoginModal
       :is-open="isAdminLoginOpen"
