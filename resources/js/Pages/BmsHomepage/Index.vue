@@ -3,7 +3,6 @@ import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { Head, Link } from '@inertiajs/vue3';
 import { appPath } from '../../helpers';
 import PosterManagerModal from './Components/PosterManagerModal.vue';
-import SessionConnectModal from './Components/SessionConnectModal.vue';
 import ClinicWorkloadCard from './Components/ClinicWorkloadCard.vue';
 import { 
   Building2, 
@@ -46,9 +45,13 @@ const props = defineProps({
     type: String,
     default: null,
   },
-  gatewayError: {
+  dbError: {
     type: String,
     default: null,
+  },
+  wardCensus: {
+    type: Array,
+    default: () => [],
   },
   hosxpData: {
     type: Object,
@@ -78,28 +81,24 @@ const props = defineProps({
     type: Object,
     default: () => ({ total: 0, active: 0, inactive: 0, max: 8, remaining: 8 }),
   },
-  bmsUser: {
-    type: Object,
-    default: null,
-  },
-  hasSession: {
+  dbConnected: {
     type: Boolean,
     default: false,
   },
-  bmsSessionId: {
-    type: String,
-    default: null,
-  },
 });
+
+// Ward census card colors by position: green, yellow, red
+const wardCardStyles = [
+  { card: 'bg-[#edf9f1] border-[#a6e5b8]', title: 'text-[#1f7a3f]', count: 'text-[#166534]' },
+  { card: 'bg-[#fffbeb] border-[#fde68a]', title: 'text-[#a16207]', count: 'text-[#b45309]' },
+  { card: 'bg-[#fff5f5] border-[#fecaca]', title: 'text-[#b91c1c]', count: 'text-[#dc2626]' },
+];
 
 // Carousel State
 const currentIndex = ref(0);
 const isAutoPlay = ref(true);
 let autoPlayTimer = null;
 const isFullscreen = ref(false);
-
-// BMS Session Connection Modal State
-const isSessionModalOpen = ref(false);
 
 // HOSxP Admin Poster Manager Modal State
 const isPosterManagerOpen = ref(false);
@@ -176,94 +175,56 @@ onUnmounted(() => {
           <div class="flex items-center gap-1.5 truncate">
             <Building2 class="w-4 h-4 text-[#17538d] shrink-0" />
             <h1 class="text-xs font-bold text-[#17538d] tracking-tight truncate">
-              {{ hasSession && (hosxpData.hospital_name || hospitalName) ? (hosxpData.hospital_name || hospitalName) : (gatewayError || 'ไม่สามารถเชื่อมต่อ BMS-Session-Gateway') }}
+              {{ dbConnected && (hosxpData.hospital_name || hospitalName) ? (hosxpData.hospital_name || hospitalName) : (dbError || 'ไม่สามารถเชื่อมต่อฐานข้อมูล HOSxP') }}
             </h1>
-            <span v-if="hospitalCode" class="text-[10px] font-mono font-semibold bg-white px-1.5 py-0.5 rounded text-[#17538d] shrink-0 border border-[#adc5de]">
-              รหัส รพ. {{ hospitalCode }}
-            </span>
           </div>
 
-          <!-- Gateway Connection Indicator Badge -->
+          <!-- Database Connection Indicator Badge -->
           <div class="shrink-0 flex items-center gap-1">
             <span 
-              v-if="hasSession && !gatewayError" 
+              v-if="dbConnected" 
               class="text-[10px] font-semibold text-[#166534] bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full flex items-center gap-1"
             >
               <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-              เชื่อมต่อ BMS Gateway
+              เชื่อมต่อฐานข้อมูล HOSxP
             </span>
-            <button 
+            <span 
               v-else 
-              type="button" 
-              @click="isSessionModalOpen = true" 
-              class="text-[10px] font-semibold text-rose-700 bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2 py-0.5 rounded-full flex items-center gap-1 cursor-pointer transition-colors"
-              title="คลิกเพื่อเชื่อมต่อ BMS Session Gateway"
+              class="text-[10px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-full flex items-center gap-1"
             >
               <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
-              ไม่สามารถเชื่อมต่อ BMS-Session-Gateway
-            </button>
+              ไม่สามารถเชื่อมต่อฐานข้อมูล HOSxP
+            </span>
           </div>
         </div>
 
         <!-- Left Scrollable Content -->
         <div class="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
           
-          <!-- BMS Gateway Disconnected Warning Banner -->
+          <!-- HOSxP Database Disconnected Warning Banner -->
           <div 
-            v-if="!hasSession || gatewayError" 
-            class="p-2.5 rounded-lg bg-rose-50 border border-rose-200 flex items-center justify-between gap-2 text-rose-800 shadow-2xs"
+            v-if="!dbConnected" 
+            class="p-2.5 rounded-lg bg-rose-50 border border-rose-200 flex items-center gap-2 text-rose-800 shadow-2xs"
           >
-            <div class="flex items-center gap-2">
-              <AlertTriangle class="w-4 h-4 text-rose-600 shrink-0" />
-              <div class="text-xs">
-                <span class="font-bold">ไม่สามารถเชื่อมต่อ BMS-Session-Gateway</span>
-                <span class="text-[11px] text-rose-600 ml-1 hidden sm:inline">• ข้อมูลสถิติและรายงานระบบ HOSxP ไม่พร้อมใช้งาน</span>
-              </div>
+            <AlertTriangle class="w-4 h-4 text-rose-600 shrink-0" />
+            <div class="text-xs">
+              <span class="font-bold">ไม่สามารถเชื่อมต่อฐานข้อมูล HOSxP</span>
+              <span class="text-[11px] text-rose-600 ml-1">• ข้อมูลสถิติและรายงานระบบ HOSxP ไม่พร้อมใช้งาน กรุณาตรวจสอบการตั้งค่า DB_*_2 ใน .env</span>
             </div>
-            <button 
-              type="button" 
-              @click="isSessionModalOpen = true" 
-              class="text-[11px] font-semibold px-2 py-1 bg-white border border-rose-300 text-rose-700 rounded-md hover:bg-rose-100 transition-colors cursor-pointer shrink-0"
-            >
-              เชื่อมต่อ Session
-            </button>
           </div>
 
           <!-- Quick Stat KPI Boxes (HOSxP Delphi Style) -->
-          <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            
-            <!-- OPD Today -->
-            <div class="bg-[#f5f9fd] border border-[#cbdbe9] p-2.5 rounded-lg text-center shadow-xs">
-              <div class="text-[11px] font-semibold text-[#3b6d9e] mb-0.5">ผู้ป่วยนอก (OPD)</div>
-              <div class="text-2xl font-black text-[#1b62a5]">{{ hosxpData.opd_total }}</div>
-              <div class="text-[10px] text-slate-500 font-sarabun">รายวันนี้</div>
+          <div class="grid grid-cols-3 gap-2">
+            <div
+              v-for="(ward, index) in wardCensus"
+              :key="ward.ward"
+              class="border p-2.5 rounded-lg text-center shadow-xs"
+              :class="wardCardStyles[index % wardCardStyles.length].card"
+            >
+              <div class="text-[11px] font-semibold mb-0.5 truncate" :class="wardCardStyles[index % wardCardStyles.length].title" :title="ward.name">{{ ward.name }}</div>
+              <div class="text-2xl font-black" :class="wardCardStyles[index % wardCardStyles.length].count">{{ ward.count }}</div>
+              <div class="text-[10px] font-sarabun" :class="wardCardStyles[index % wardCardStyles.length].title">ผู้ป่วยที่ Admit อยู่ (ราย)</div>
             </div>
-
-            <!-- IPD Bed Occupancy (Green HOSxP Style) -->
-            <div class="bg-[#edf9f1] border border-[#a6e5b8] p-2.5 rounded-lg text-center shadow-xs">
-              <div class="text-[11px] font-semibold text-[#1f7a3f] mb-0.5">ครองเตียง (IPD)</div>
-              <div class="text-2xl font-black text-[#166534]">
-                {{ hosxpData.ipd_occupied }}/{{ hosxpData.ipd_total }}
-              </div>
-              <div class="text-[10px] text-[#1f7a3f] font-semibold font-sarabun">
-                ว่าง {{ hosxpData.ipd_total - hosxpData.ipd_occupied }} เตียง ({{ hosxpData.ipd_rate }}%)
-              </div>
-            </div>
-
-            <!-- Queue Wait Time -->
-            <div class="bg-[#f5f9fd] border border-[#cbdbe9] p-2.5 rounded-lg text-center shadow-xs">
-              <div class="text-[11px] font-semibold text-[#3b6d9e] mb-0.5">รอตรวจเฉลี่ย</div>
-              <div class="text-2xl font-black text-[#23588d]">{{ hosxpData.avg_wait_minutes }}</div>
-              <div class="text-[10px] text-slate-500 font-sarabun">นาที / ราย</div>
-            </div>
-
-            <!-- ER Urgent -->
-            <div class="bg-[#fff5f5] border border-[#fecaca] p-2.5 rounded-lg text-center shadow-xs">
-              <div class="text-[11px] font-semibold text-[#b91c1c] mb-0.5">ฉุกเฉิน (ER)</div>
-              <div class="text-2xl font-black text-[#dc2626]">{{ hosxpData.er_urgent }}</div>
-              <div class="text-[10px] text-rose-600 font-sarabun">เคสเร่งด่วน</div>
-            </div>
-
           </div>
 
           <!-- Clinic Workload Progress Bars (HOSxP Live Data with Thai Calendar Date Picker in Top-Right) -->
@@ -278,20 +239,14 @@ onUnmounted(() => {
         <div class="px-3 py-1 bg-[#dce7f3] border-t border-[#adc5de] flex items-center justify-between text-[11px] text-[#475569] font-sarabun shrink-0">
           <div class="flex items-center gap-1.5 truncate">
             <Database class="w-3.5 h-3.5 text-[#17538d] shrink-0" />
-            <span class="truncate">โมดูล: SmartReport Homepage • เชื่อมต่อผ่าน BMS Session Gateway</span>
+            <span class="truncate">โมดูล: SmartReport Homepage • เชื่อมต่อฐานข้อมูล HOSxP โดยตรง</span>
           </div>
-          <span v-if="hasSession && !gatewayError" class="text-[#166534] font-semibold shrink-0">
-            ● เชื่อมต่อ BMS Gateway สำเร็จ
+          <span v-if="dbConnected" class="text-[#166534] font-semibold shrink-0">
+            ● เชื่อมต่อฐานข้อมูล HOSxP สำเร็จ
           </span>
-          <button 
-            v-else 
-            type="button" 
-            @click="isSessionModalOpen = true" 
-            class="text-[#dc2626] font-semibold shrink-0 hover:underline cursor-pointer flex items-center gap-1"
-            title="คลิกเพื่อเชื่อมต่อ BMS Session"
-          >
-            ● ไม่สามารถเชื่อมต่อ BMS-Session-Gateway
-          </button>
+          <span v-else class="text-[#dc2626] font-semibold shrink-0">
+            ● ไม่สามารถเชื่อมต่อฐานข้อมูล HOSxP
+          </span>
         </div>
 
       </section>
@@ -456,15 +411,6 @@ onUnmounted(() => {
       :hospital-name="hospitalName"
       :stats="adminStats || { total: posters.length, max: 8, remaining: 8 - posters.length }"
       @close="isPosterManagerOpen = false"
-    />
-
-    <!-- BMS SESSION CONNECTION MODAL -->
-    <SessionConnectModal
-      :is-open="isSessionModalOpen"
-      :can-close="true"
-      :current-session-id="bmsSessionId"
-      :bms-user="bmsUser"
-      @close="isSessionModalOpen = false"
     />
 
   </div>

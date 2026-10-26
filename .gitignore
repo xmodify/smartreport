@@ -25,3 +25,7 @@ _ide_helper.php
 Homestead.json
 Homestead.yaml
 Thumbs.db
+
+# Runtime poster uploads
+/public/uploads/homepage/*
+!/public/uploads/homepage/.gitkeep

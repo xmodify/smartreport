@@ -2,12 +2,9 @@
 
 namespace Tests\Feature;
 
-use App\Models\BmsSession;
 use App\Models\Homepage;
-use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
 
@@ -339,25 +336,14 @@ class HospitalPosterIsolationTest extends TestCase
      */
     public function test_clinic_stats_api_returns_json_by_date(): void
     {
-        BmsSession::create([
-            'device_key' => 'test-device-stats',
-            'bms_session_id' => 'mock-session-stats',
-            'bms_url' => 'http://127.0.0.1:45011',
-            'bms_session_code' => 'TEST-STATS-CODE',
-            'expires_at' => Carbon::now()->addHours(8),
-        ]);
+        $this->fakeHosxpDatabase(fn (string $sql): array => str_contains($sql, 'COUNT(*) AS total')
+            ? [['total' => 234]]
+            : [
+                ['name' => 'คลินิกผู้ป่วยนอกทั่วไป (OPD)', 'count' => 148],
+                ['name' => 'คลินิกโรคเรื้อรัง (NCDs)', 'count' => 86],
+            ]);
 
-        Http::fake([
-            '*/api/sql*' => Http::response([
-                'result' => [
-                    ['name' => 'คลินิกผู้ป่วยนอกทั่วไป (OPD)', 'count' => 148],
-                    ['name' => 'คลินิกโรคเรื้อรัง (NCDs)', 'count' => 86],
-                ],
-            ], 200),
-        ]);
-
-        $response = $this->withHeaders(['X-Device-Key' => 'test-device-stats'])
-            ->getJson('/bms-homepage/clinic-stats?date=2026-10-22');
+        $response = $this->getJson('/bms-homepage/clinic-stats?date=2026-10-22');
 
         $response->assertStatus(200)
             ->assertJsonStructure([
@@ -378,5 +364,52 @@ class HospitalPosterIsolationTest extends TestCase
 
         $this->assertEquals('2026-10-22', $response->json('selected_date'));
         $this->assertTrue($response->json('is_live'));
+    }
+
+    /**
+     * Test hospital identity and ward census come directly from the HOSxP database.
+     */
+    public function test_homepage_reads_hospital_and_ward_census_from_hosxp_database(): void
+    {
+        $this->fakeHosxpDatabase(function (string $sql): array {
+            return match (true) {
+                str_contains($sql, 'FROM opdconfig') => [['hospitalcode' => '10989']],
+                str_contains($sql, 'FROM hospcode') => [['name' => 'โรงพยาบาลหัวตะพาน']],
+                str_contains($sql, 'FROM ward w') => [
+                    ['ward' => '01', 'name' => 'ผู้ป่วยใน สามัญ', 'total' => 25],
+                    ['ward' => '03', 'name' => 'ผู้ป่วยใน VIP', 'total' => 12],
+                    ['ward' => '10', 'name' => 'ผู้ป่วยหนัก', 'total' => 3],
+                ],
+                default => [],
+            };
+        });
+
+        $this->get('/bms-homepage')
+            ->assertOk()
+            ->assertInertia(fn ($page) => $page
+                ->where('dbConnected', true)
+                ->where('hospitalCode', '10989')
+                ->where('hospitalName', 'โรงพยาบาลหัวตะพาน')
+                ->where('wardCensus.0.ward', '03')
+                ->where('wardCensus.0.name', 'ผู้ป่วยใน VIP')
+                ->where('wardCensus.0.count', 12)
+                ->where('wardCensus.1.count', 25)
+                ->where('wardCensus.2.count', 3)
+            );
+    }
+
+    /**
+     * Test homepage still renders and reports the failure when HOSxP database is unreachable.
+     */
+    public function test_homepage_reports_error_when_hosxp_database_is_unreachable(): void
+    {
+        $this->get('/bms-homepage?hcode=10989')
+            ->assertOk()
+            ->assertInertia(fn ($page) => $page
+                ->where('dbConnected', false)
+                ->where('dbError', 'ไม่สามารถเชื่อมต่อฐานข้อมูล HOSxP')
+                ->where('clinicStats.is_live', false)
+                ->has('wardCensus', 3)
+            );
     }
 }

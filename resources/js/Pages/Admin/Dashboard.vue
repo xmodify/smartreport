@@ -10,7 +10,6 @@ import {
   Sparkles, 
   Activity, 
   Server, 
-  Database,
   ArrowUpRight,
   FolderKanban
 } from 'lucide-vue-next';
@@ -26,7 +25,7 @@ const props = defineProps({
   },
   stats: {
     type: Object,
-    default: () => ({ active_sessions: 0, total_posters: 0 }),
+    default: () => ({ total_posters: 0 }),
   },
 });
 
@@ -147,16 +146,6 @@ const handleLogout = () => {
           <div>
             <div class="text-[11px] font-medium text-slate-500">ระบบที่ติดตั้งในโปรเจกต์</div>
             <div class="text-base font-bold text-slate-800">1 ระบบ (SmartReport Homepage)</div>
-          </div>
-        </div>
-
-        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
-          <div class="w-10 h-10 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
-            <Database class="w-5 h-5" />
-          </div>
-          <div>
-            <div class="text-[11px] font-medium text-slate-500">BMS Session ที่บันทึก</div>
-            <div class="text-base font-bold text-slate-800">{{ stats?.active_sessions || 0 }} เซสชัน</div>
           </div>
         </div>
 

@@ -3,7 +3,6 @@
 namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
-use App\Models\BmsSession;
 use App\Models\Homepage;
 use Illuminate\Http\Request;
 use Inertia\Inertia;
@@ -33,7 +32,6 @@ class DashboardController extends Controller
                 ],
             ],
             'stats' => [
-                'active_sessions' => BmsSession::where('expires_at', '>', now())->count(),
                 'total_posters' => Homepage::count(),
             ],
         ]);

@@ -1,11 +1,11 @@
 /**
- * Helper to ensure links work both under sub-path (/smartreport, /bms-homepage, /bms_homepage, /bms-session) and root (/)
+ * Helper to ensure links work both under sub-path (/smartreport, /bms-homepage, /bms_homepage) and root (/)
  */
 export function appPath(path = '') {
   let base = '';
   if (typeof window !== 'undefined' && window.location) {
     const pathname = window.location.pathname;
-    const knownPrefixes = ['/smartreport', '/bms_homepage', '/bms-session'];
+    const knownPrefixes = ['/smartreport', '/bms_homepage'];
     for (const prefix of knownPrefixes) {
       if (pathname.startsWith(prefix)) {
         base = prefix;

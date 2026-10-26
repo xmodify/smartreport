@@ -34,10 +34,6 @@ Route::prefix('bms-homepage')->name('homepage.')->group(function () {
     Route::get('/', [BmsHomepageController::class, 'index'])->name('index');
     Route::get('/index.html', [BmsHomepageController::class, 'index']);
 
-    // BMS Session Management (Connect / Disconnect manually when not opened from HOSxP)
-    Route::post('/session/connect', [BmsHomepageController::class, 'connectSession'])->name('session.connect');
-    Route::post('/session/disconnect', [BmsHomepageController::class, 'disconnectSession'])->name('session.disconnect');
-
     // Real-Time OPD Queue Congestion Heatmap API
     Route::get('/queue-heatmap', [BmsHomepageController::class, 'getQueueHeatmap'])->name('queue-heatmap');
 

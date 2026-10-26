@@ -289,10 +289,10 @@ const stepDay = (days) => {
         <span 
           v-else
           class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200"
-          title="ไม่สามารถเชื่อมต่อ BMS-Session-Gateway"
+          title="ไม่สามารถเชื่อมต่อฐานข้อมูล HOSxP"
         >
           <span class="w-1.5 h-1.5 rounded-full bg-rose-500"></span>
-          ไม่สามารถเชื่อมต่อ BMS-Session-Gateway
+          ไม่สามารถเชื่อมต่อฐานข้อมูล HOSxP
         </span>
       </div>
 
@@ -473,7 +473,7 @@ const stepDay = (days) => {
     </div>
 
     <!-- Progress Bars List -->
-    <div v-if="departments.length > 0" class="space-y-2 font-sarabun text-xs">
+    <div v-if="departments.length > 0" class="space-y-2 font-sarabun text-xs max-h-88 overflow-y-auto pr-1">
       <div 
         v-for="(dept, i) in departments" 
         :key="i"
@@ -517,8 +517,8 @@ const stepDay = (days) => {
     <div v-else class="py-6 text-center font-sarabun">
       <div v-if="!isLive" class="space-y-1">
         <AlertTriangle class="w-6 h-6 mx-auto mb-1 text-rose-500" />
-        <p class="text-xs font-bold text-rose-600">ไม่สามารถเชื่อมต่อ BMS-Session-Gateway</p>
-        <p class="text-[10px] text-slate-500">กรุณาเปิดระบบผ่านโปรแกรม HOSxP หรือเชื่อมต่อ BMS Session ด้วยตนเอง</p>
+        <p class="text-xs font-bold text-rose-600">ไม่สามารถเชื่อมต่อฐานข้อมูล HOSxP</p>
+        <p class="text-[10px] text-slate-500">กรุณาตรวจสอบการเชื่อมต่อฐานข้อมูล HOSxP ของเซิร์ฟเวอร์</p>
       </div>
       <div v-else class="space-y-1 text-slate-400">
         <Info class="w-6 h-6 mx-auto mb-1 text-slate-300" />

@@ -3,14 +3,12 @@
 namespace App\Http\Controllers\BmsHomepage;
 
 use App\Http\Controllers\Controller;
-use App\Models\BmsSession;
 use App\Models\Homepage;
-use App\Services\Bms\Bms;
+use App\Services\Hosxp\HosxpDatabase;
 use Carbon\Carbon;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Inertia;
@@ -18,87 +16,43 @@ use Inertia\Response;
 
 class HomepageController extends Controller
 {
+    protected const DB_ERROR_MESSAGE = 'ไม่สามารถเชื่อมต่อฐานข้อมูล HOSxP';
+
+    public function __construct(protected HosxpDatabase $hosxp) {}
+
     /**
      * Display the BMS Homepage (One-Page Split Screen: Reports & Posters).
      */
     public function index(Request $request): Response
     {
-        Log::info('HOSxP BMS-Homepage Request', [
-            'full_url' => $request->fullUrl(),
-            'query' => $request->query(),
-            'client_ip' => $request->ip(),
-        ]);
+        // 1. Resolve hospital directly from the HOSxP database
+        $dbConnected = false;
+        $dbHospitalCode = null;
+        $dbHospitalName = null;
 
-        // 1. Resolve and store session if opened with BMS Session ID (query string, post, or server QUERY_STRING)
-        $bmsSession = null;
-        $gatewayError = null;
-        $sessionId = $this->extractSessionId($request);
-
-        if (! empty($sessionId)) {
-            $deviceKey = Bms::session()->getOrCreateDeviceKey($request);
-            try {
-                $resolved = Bms::session()->resolveSession($sessionId);
-                $bmsSession = Bms::session()->saveSession(
-                    $deviceKey,
-                    $sessionId,
-                    $resolved,
-                    $request->query('hn'),
-                    $request->query('vn'),
-                    $request
-                );
-                session(['bms_session_id' => $sessionId]);
-            } catch (\Throwable $e) {
-                Log::warning('BMS session resolve failed: '.$e->getMessage());
-            }
+        try {
+            $dbHospitalCode = $this->hosxp->hospitalCode();
+            $dbHospitalName = $dbHospitalCode ? $this->hosxp->hospitalName($dbHospitalCode) : null;
+            $dbConnected = true;
+        } catch (\Throwable $e) {
+            Log::warning('HOSxP database connection failed: '.$e->getMessage());
         }
 
-        // 2. Fallback to active session with longest remaining time
-        if (! $bmsSession) {
-            $bmsSession = Bms::current();
-        }
+        $hospitalCode = $this->resolveHospitalCode($request, $dbHospitalCode);
+        $hospitalName = $dbHospitalName
+            ?? config('homepage.default_hname')
+            ?? ($dbConnected ? null : self::DB_ERROR_MESSAGE);
 
-        if (! $bmsSession) {
-            $gatewayError = 'ไม่สามารถเชื่อมต่อ BMS-Session-Gateway';
-        }
+        $canManageAdmin = $this->isHomepageAdmin($request);
 
-        // 3. Verify HOSxP Admin permission via BMS Session /api/sql
-        $canManageAdmin = false;
-        if ($bmsSession && Bms::isAdmin($bmsSession)) {
-            $canManageAdmin = true;
-        } elseif (app()->environment('testing') || (app()->environment('local') && $request->has('admin'))) {
-            $canManageAdmin = true;
-        }
-
-        // 4. Resolve hospital code and name directly from HOSxP via BMS Gateway
-        $hospitalCode = Bms::hospitalCode($bmsSession, $request);
-        $hospitalName = $bmsSession ? ($bmsSession->hospital_name ?? Bms::hospitalName($bmsSession)) : 'ไม่สามารถเชื่อมต่อ BMS-Session-Gateway';
-
-        if ($bmsSession) {
-            try {
-                $hospQuery = 'SELECT name, hospcode FROM hospcode WHERE hospcode = :hospcode';
-                $hospRows = Bms::data()->executeSql($bmsSession, $hospQuery, ['hospcode' => $hospitalCode], 1);
-                if (! empty($hospRows[0]['name'])) {
-                    $hospitalName = (string) $hospRows[0]['name'];
-                    if (empty($bmsSession->hospital_name)) {
-                        $bmsSession->update(['hospital_name' => $hospitalName]);
-                    }
-                }
-                if (! $request->filled('hcode') && ! empty($hospRows[0]['hospcode'])) {
-                    $hospitalCode = (string) $hospRows[0]['hospcode'];
-                }
-            } catch (\Throwable $e) {
-                Log::warning('HOSxP hospcode query failed: '.$e->getMessage());
-            }
-        }
-
-        // 5. Query ONLY active posters belonging to this hospital for the main carousel
+        // 2. Query ONLY active posters belonging to this hospital for the main carousel
         $posters = Homepage::where('is_active', true)
             ->forHospital($hospitalCode)
             ->orderBy('order_num')
             ->latest()
             ->get();
 
-        // 6. Query all posters for this hospital if admin mode (for poster manager)
+        // 3. Query all posters for this hospital if admin mode (for poster manager)
         $adminPosters = $canManageAdmin
             ? Homepage::forHospital($hospitalCode)->orderBy('order_num')->latest()->get()
             : [];
@@ -114,18 +68,18 @@ class HomepageController extends Controller
             'remaining' => max(0, $maxLimit - $totalCount),
         ] : null;
 
-        // 7. Load HOSxP Clinic Service Stats & Real-time queue metrics
+        // 4. Load HOSxP Clinic Service Stats & Real-time queue metrics
         $initialDate = now()->format('Y-m-d');
-        if ($bmsSession) {
-            $latestDate = $this->getLatestActiveOvstDate($bmsSession);
-            if ($latestDate && ! $this->hasActiveVisitsOnDate($bmsSession, $initialDate)) {
+        if ($dbConnected) {
+            $latestDate = $this->getLatestActiveOvstDate();
+            if ($latestDate && ! $this->hasActiveVisitsOnDate($initialDate)) {
                 $initialDate = $latestDate;
             }
         }
 
-        $clinicStats = $this->fetchClinicStatsData($bmsSession, $initialDate);
-        $realtimeData = $this->fetchRealtimeCurDepData($bmsSession);
-        $queueHeatmap = $this->fetchQueueHeatmapData($bmsSession, $initialDate);
+        $clinicStats = $this->fetchClinicStatsData($initialDate);
+        $realtimeData = $this->fetchRealtimeCurDepData();
+        $queueHeatmap = $this->fetchQueueHeatmapData($initialDate);
 
         // Hospital Metrics for left dashboard
         $hosxpData = [
@@ -133,49 +87,112 @@ class HomepageController extends Controller
             'hospital_name' => $hospitalName,
             'today_date' => now()->locale('th')->isoFormat('D MMMM GGGG'),
             'opd_total' => $clinicStats['total_patients'] ?? 0,
-            'ipd_occupied' => 0,
-            'ipd_total' => 0,
-            'ipd_rate' => 0,
-            'er_urgent' => 0,
-            'avg_wait_minutes' => 0,
             'top_departments' => $clinicStats['departments'] ?? [],
         ];
-
-        if ($bmsSession) {
-            try {
-                $iptRes = Bms::data()->executeSql($bmsSession, 'SELECT COUNT(*) AS total FROM ipt WHERE dchdate IS NULL', [], 1);
-                $hosxpData['ipd_occupied'] = ! empty($iptRes[0]['total']) ? (int) $iptRes[0]['total'] : 0;
-            } catch (\Throwable $e) {
-            }
-
-            try {
-                $erRes = Bms::data()->executeSql($bmsSession, 'SELECT COUNT(*) AS total FROM er_regist WHERE vstdate = CURDATE()', [], 1);
-                $hosxpData['er_urgent'] = ! empty($erRes[0]['total']) ? (int) $erRes[0]['total'] : 0;
-            } catch (\Throwable $e) {
-            }
-        }
 
         return Inertia::render('BmsHomepage/Index', [
             'posters' => $posters,
             'hospitalCode' => $hospitalCode,
             'hospitalName' => $hospitalName,
             'hosxpData' => $hosxpData,
+            'wardCensus' => $this->fetchWardCensus(),
             'clinicStats' => $clinicStats,
             'realtimeData' => $realtimeData,
             'queueHeatmap' => $queueHeatmap,
             'canManageAdmin' => $canManageAdmin,
             'adminPosters' => $adminPosters,
             'adminStats' => $adminStats,
-            'hasSession' => (bool) $bmsSession,
-            'gatewayError' => $gatewayError,
-            'bmsSessionId' => $bmsSession ? $bmsSession->bms_session_id : null,
-            'bmsUser' => $bmsSession ? [
-                'user_id' => $bmsSession->user_id,
-                'user_name' => $bmsSession->user_name,
-                'hospital_code' => $bmsSession->hospital_code ?? $hospitalCode,
-                'hospital_name' => $bmsSession->hospital_name ?? $hospitalName,
-            ] : null,
+            'dbConnected' => $dbConnected,
+            'dbError' => $dbConnected ? null : self::DB_ERROR_MESSAGE,
         ]);
+    }
+
+    /**
+     * Hospital code from the request (?hcode=), else HOSxP opdconfig, else config default.
+     */
+    protected function resolveHospitalCode(Request $request, ?string $dbHospitalCode = null): ?string
+    {
+        $requested = $request->query('hcode') ?? $request->query('hospital_code') ?? $request->input('hcode');
+        if (! empty($requested)) {
+            return (string) $requested;
+        }
+
+        if ($dbHospitalCode === null) {
+            try {
+                $dbHospitalCode = $this->hosxp->hospitalCode();
+            } catch (\Throwable $e) {
+                Log::warning('HOSxP hospital code lookup failed: '.$e->getMessage());
+            }
+        }
+
+        return $dbHospitalCode ?? config('homepage.default_hcode');
+    }
+
+    /**
+     * Poster management is limited to testing/IT workstations listed in bms.admin_ips.
+     */
+    protected function isHomepageAdmin(Request $request): bool
+    {
+        if (app()->environment('testing')) {
+            return true;
+        }
+
+        /** @var array<int, string> $allowedIps */
+        $allowedIps = config('homepage.admin_ips', []);
+
+        return in_array($request->ip(), $allowedIps, true);
+    }
+
+    /**
+     * Count patients currently admitted (not yet discharged) in each monitored ward.
+     *
+     * @return array<int, array{ward: string, name: string, count: int}>
+     */
+    protected function fetchWardCensus(): array
+    {
+        /** @var array<int, string> $wardCodes */
+        $wardCodes = array_values(config('homepage.census_wards', ['03', '01', '10']));
+
+        $census = array_map(fn (string $code): array => [
+            'ward' => $code,
+            'name' => "Ward {$code}",
+            'count' => 0,
+        ], $wardCodes);
+
+        $safeCodes = array_filter($wardCodes, fn (string $code): bool => preg_match('/^[A-Za-z0-9]+$/', $code) === 1);
+        if ($safeCodes === []) {
+            return $census;
+        }
+        $inList = "'".implode("','", $safeCodes)."'";
+
+        $sql = "SELECT w.ward, w.name, COUNT(i.an) AS total
+                FROM ward w
+                LEFT JOIN ipt i ON i.ward = w.ward AND i.dchdate IS NULL
+                WHERE w.ward IN ({$inList})
+                GROUP BY w.ward, w.name";
+
+        try {
+            $rows = $this->hosxp->select($sql, [], count($safeCodes));
+        } catch (\Throwable $e) {
+            Log::warning('HOSxP ward census query failed: '.$e->getMessage());
+
+            return $census;
+        }
+
+        $byWard = [];
+        foreach ($rows as $row) {
+            $byWard[(string) ($row['ward'] ?? '')] = $row;
+        }
+
+        return array_map(function (array $item) use ($byWard): array {
+            $row = $byWard[$item['ward']] ?? null;
+            if ($row !== null) {
+                $item['name'] = (string) ($row['name'] ?? $item['name']);
+                $item['count'] = (int) ($row['total'] ?? 0);
+            }
+
+            return $item;
+        }, $census);
     }
 
     /**
@@ -184,17 +201,8 @@ class HomepageController extends Controller
     public function getClinicStats(Request $request): JsonResponse
     {
         $date = (string) $request->query('date', now()->format('Y-m-d'));
-        $bmsSession = Bms::current();
-        if (! $bmsSession) {
-            $sessionId = $this->extractSessionId($request);
-            if (! empty($sessionId)) {
-                $bmsSession = BmsSession::where('bms_session_id', $sessionId)->first();
-            }
-        }
 
-        $stats = $this->fetchClinicStatsData($bmsSession, $date);
-
-        return response()->json($stats);
+        return response()->json($this->fetchClinicStatsData($date));
     }
 
     /**
@@ -202,21 +210,11 @@ class HomepageController extends Controller
      */
     public function getQueueHeatmap(Request $request): JsonResponse
     {
-        $date = $request->query('date', now()->format('Y-m-d'));
-        $bmsSession = Bms::current();
-        if (! $bmsSession) {
-            $sessionId = $this->extractSessionId($request);
-            if (! empty($sessionId)) {
-                $bmsSession = BmsSession::where('bms_session_id', $sessionId)->first();
-            }
-        }
-
-        $realtimeData = $this->fetchRealtimeCurDepData($bmsSession);
-        $heatmapData = $this->fetchQueueHeatmapData($bmsSession, $date);
+        $date = (string) $request->query('date', now()->format('Y-m-d'));
 
         return response()->json([
-            'realtime' => $realtimeData,
-            'heatmap' => $heatmapData,
+            'realtime' => $this->fetchRealtimeCurDepData(),
+            'heatmap' => $this->fetchQueueHeatmapData($date),
         ]);
     }
 
@@ -225,9 +223,9 @@ class HomepageController extends Controller
      *
      * @return array<string, mixed>
      */
-    public function fetchRealtimeCurDepData(?BmsSession $bmsSession): array
+    public function fetchRealtimeCurDepData(): array
     {
-        $sqlToday = "SELECT 
+        $sqlToday = "SELECT
                         k.department,
                         k.depcode,
                         COUNT(*) AS waiting_count
@@ -240,27 +238,13 @@ class HomepageController extends Controller
                     GROUP BY k.department, k.depcode
                     ORDER BY waiting_count DESC";
 
-        if (! $bmsSession) {
-            return [
-                'total_waiting' => 0,
-                'departments' => [],
-                'is_live' => false,
-                'error' => 'ไม่สามารถเชื่อมต่อ BMS-Session-Gateway',
-                'query_time' => now()->format('H:i:s'),
-                'sql' => $sqlToday,
-            ];
-        }
-
-        $rows = [];
-        $isLive = false;
-
         try {
             // 1. Live query for today: ovst.cur_dep
-            $rows = Bms::data()->executeSql($bmsSession, $sqlToday, [], 100);
+            $rows = $this->hosxp->select($sqlToday, [], 100);
 
             // 2. If today is empty/holiday, check latest active date
             if (empty($rows)) {
-                $sqlLatest = "SELECT 
+                $sqlLatest = "SELECT
                                 k.department,
                                 k.depcode,
                                 COUNT(*) AS waiting_count
@@ -272,10 +256,8 @@ class HomepageController extends Controller
                               AND o.cur_dep <> '999'
                             GROUP BY k.department, k.depcode
                             ORDER BY waiting_count DESC";
-                $rows = Bms::data()->executeSql($bmsSession, $sqlLatest, [], 20);
+                $rows = $this->hosxp->select($sqlLatest, [], 20);
             }
-
-            $isLive = true;
         } catch (\Throwable $e) {
             Log::warning('Real-time ovst.cur_dep query failed: '.$e->getMessage());
 
@@ -283,7 +265,7 @@ class HomepageController extends Controller
                 'total_waiting' => 0,
                 'departments' => [],
                 'is_live' => false,
-                'error' => 'ไม่สามารถเชื่อมต่อ BMS-Session-Gateway',
+                'error' => self::DB_ERROR_MESSAGE,
                 'query_time' => now()->format('H:i:s'),
                 'sql' => $sqlToday,
             ];
@@ -306,40 +288,37 @@ class HomepageController extends Controller
         return [
             'total_waiting' => $totalWaiting,
             'departments' => $formattedDepartments,
-            'is_live' => $isLive,
+            'is_live' => true,
             'query_time' => now()->format('H:i:s'),
             'sql' => $sqlToday,
         ];
     }
 
     /**
-     * Fetch and format OPD Queue Heatmap data from HOSxP via BMS Session.
+     * Fetch and format OPD Queue Heatmap data from the HOSxP database.
      *
      * @return array<string, mixed>
      */
-    public function fetchQueueHeatmapData(?BmsSession $bmsSession, string $date): array
+    public function fetchQueueHeatmapData(string $date): array
     {
         $rawRows = [];
         $isLive = false;
 
-        if ($bmsSession) {
-            try {
-                $sql = "SELECT k.department, HOUR(q.queue_datetime) AS hr, COUNT(*) AS q
-                        FROM opd_dep_queue q
-                        LEFT JOIN kskdepartment k ON k.depcode = q.depcode
-                        WHERE DATE(q.queue_datetime) = :selected_date
-                          AND q.depcode <> '999'
-                        GROUP BY k.department, HOUR(q.queue_datetime)
-                        ORDER BY k.department, hr";
-                $params = ['selected_date' => $date];
+        try {
+            $sql = "SELECT k.department, HOUR(q.queue_datetime) AS hr, COUNT(*) AS q
+                    FROM opd_dep_queue q
+                    LEFT JOIN kskdepartment k ON k.depcode = q.depcode
+                    WHERE DATE(q.queue_datetime) = :selected_date
+                      AND q.depcode <> '999'
+                    GROUP BY k.department, HOUR(q.queue_datetime)
+                    ORDER BY k.department, hr";
 
-                $rawRows = Bms::data()->executeSql($bmsSession, $sql, $params, 1000);
-                if (! empty($rawRows)) {
-                    $isLive = true;
-                }
-            } catch (\Throwable $e) {
-                Log::warning('BMS Queue Heatmap Query note: '.$e->getMessage());
+            $rawRows = $this->hosxp->select($sql, ['selected_date' => $date], 1000);
+            if (! empty($rawRows)) {
+                $isLive = true;
             }
+        } catch (\Throwable $e) {
+            Log::warning('HOSxP queue heatmap query failed: '.$e->getMessage());
         }
 
         return $this->formatQueueHeatmap($rawRows, $date, $isLive);
@@ -418,7 +397,7 @@ class HomepageController extends Controller
      *
      * @return array<string, mixed>
      */
-    public function fetchClinicStatsData(?BmsSession $bmsSession, string $date): array
+    public function fetchClinicStatsData(string $date): array
     {
         try {
             $carbon = Carbon::parse($date);
@@ -428,19 +407,7 @@ class HomepageController extends Controller
             $thaiDate = $date;
         }
 
-        if (! $bmsSession) {
-            return [
-                'success' => false,
-                'error' => 'ไม่สามารถเชื่อมต่อ BMS-Session-Gateway',
-                'selected_date' => $date,
-                'thai_date' => $thaiDate,
-                'is_live' => false,
-                'total_patients' => 0,
-                'departments' => [],
-            ];
-        }
-
-        $sql = "SELECT 
+        $sql = "SELECT
                     k.department AS name,
                     COUNT(DISTINCT o.vn) AS count
                 FROM ovst o
@@ -455,8 +422,8 @@ class HomepageController extends Controller
         $sqlTotal = 'SELECT COUNT(*) AS total FROM ovst WHERE vstdate = :selected_date';
 
         try {
-            $rawRows = Bms::data()->executeSql($bmsSession, $sql, ['selected_date' => $date], 100);
-            $totalRes = Bms::data()->executeSql($bmsSession, $sqlTotal, ['selected_date' => $date], 1);
+            $rawRows = $this->hosxp->select($sql, ['selected_date' => $date], 100);
+            $totalRes = $this->hosxp->select($sqlTotal, ['selected_date' => $date], 1);
             $totalOpd = ! empty($totalRes[0]['total']) ? (int) $totalRes[0]['total'] : array_sum(array_column($rawRows, 'count'));
 
             $maxCount = ! empty($rawRows) ? max(array_column($rawRows, 'count')) : 1;
@@ -481,11 +448,11 @@ class HomepageController extends Controller
                 'departments' => $departments,
             ];
         } catch (\Throwable $e) {
-            Log::warning('BMS Clinic Stats query failed: '.$e->getMessage());
+            Log::warning('HOSxP clinic stats query failed: '.$e->getMessage());
 
             return [
                 'success' => false,
-                'error' => 'ไม่สามารถเชื่อมต่อ BMS-Session-Gateway',
+                'error' => self::DB_ERROR_MESSAGE,
                 'selected_date' => $date,
                 'thai_date' => $thaiDate,
                 'is_live' => false,
@@ -498,17 +465,10 @@ class HomepageController extends Controller
     /**
      * Check if a given date has active visits in ovst.
      */
-    protected function hasActiveVisitsOnDate(?BmsSession $bmsSession, string $date): bool
+    protected function hasActiveVisitsOnDate(string $date): bool
     {
-        if (! $bmsSession) {
-            return false;
-        }
-
-        $sql = 'SELECT vn FROM ovst WHERE vstdate = :vstdate';
         try {
-            $rows = Bms::data()->executeSql($bmsSession, $sql, ['vstdate' => $date], 1);
-
-            return ! empty($rows);
+            return ! empty($this->hosxp->select('SELECT vn FROM ovst WHERE vstdate = :vstdate LIMIT 1', ['vstdate' => $date], 1));
         } catch (\Throwable $e) {
             return false;
         }
@@ -517,87 +477,30 @@ class HomepageController extends Controller
     /**
      * Get latest active visit date from ovst.
      */
-    protected function getLatestActiveOvstDate(?BmsSession $bmsSession): ?string
+    protected function getLatestActiveOvstDate(): ?string
     {
-        if (! $bmsSession) {
+        try {
+            $rows = $this->hosxp->select('SELECT MAX(vstdate) AS latest_date FROM ovst', [], 1);
+
+            return ! empty($rows[0]['latest_date']) ? (string) $rows[0]['latest_date'] : null;
+        } catch (\Throwable $e) {
             return null;
         }
-
-        $sql = 'SELECT MAX(vstdate) AS latest_date FROM ovst';
-        try {
-            $rows = Bms::data()->executeSql($bmsSession, $sql, [], 1);
-            if (! empty($rows[0]['latest_date'])) {
-                return (string) $rows[0]['latest_date'];
-            }
-        } catch (\Throwable $e) {
-        }
-
-        return null;
     }
 
     /**
-     * Connect or store BMS Session manually from prompt.
-     */
-    public function connectSession(Request $request): RedirectResponse
-    {
-        $request->validate([
-            'bms_session_id' => ['required', 'string'],
-        ]);
-
-        $sessionId = trim($request->input('bms_session_id'));
-        $deviceKey = Bms::session()->getOrCreateDeviceKey($request);
-
-        try {
-            $resolved = Bms::session()->resolveSession($sessionId);
-        } catch (\Throwable $e) {
-            Log::warning('BMS session resolve failed: '.$e->getMessage());
-
-            return back()->withErrors([
-                'bms_session_id' => 'ไม่สามารถเชื่อมต่อ BMS-Session-Gateway: รหัส Session ไม่ถูกต้องหรือหมดอายุ',
-            ]);
-        }
-
-        $session = Bms::session()->saveSession(
-            $deviceKey,
-            $sessionId,
-            $resolved,
-            $request->input('hn'),
-            $request->input('vn'),
-            $request
-        );
-
-        $hName = $session->hospital_name ? "{$session->hospital_name} " : '';
-        $hCode = $session->hospital_code ? "(รหัส {$session->hospital_code})" : '';
-
-        return redirect()->route('homepage.index')->with('success', "เชื่อมต่อ BMS Session สำเร็จ {$hName}{$hCode}");
-    }
-
-    /**
-     * Disconnect active BMS Session for current device.
-     */
-    public function disconnectSession(Request $request): RedirectResponse
-    {
-        $deviceKey = Bms::session()->getOrCreateDeviceKey($request);
-        BmsSession::forDevice($deviceKey)->delete();
-        Cache::forget('bms_latest_active_session');
-
-        return redirect()->route('homepage.index')->with('info', 'ตัดการเชื่อมต่อ BMS Session เรียบร้อยแล้ว');
-    }
-
-    /**
-     * Store new poster images uploaded by HOSxP Admin.
+     * Store new poster images uploaded by an administrator.
      */
     public function storePoster(Request $request): RedirectResponse
     {
-        $this->authorizeHosxpAdmin($request);
+        $this->authorizeHomepageAdmin($request);
 
         $request->validate([
             'image' => ['nullable', 'image', 'max:20480'],
             'images.*' => ['nullable', 'image', 'max:20480'],
         ]);
 
-        $bmsSession = Bms::current();
-        $hcode = Bms::hospitalCode($bmsSession, $request);
+        $hcode = $this->resolveHospitalCode($request);
 
         $currentCount = Homepage::forHospital($hcode)->count();
         $maxLimit = Homepage::MAX_POSTERS_PER_HOSPITAL;
@@ -674,12 +577,9 @@ class HomepageController extends Controller
      */
     public function togglePoster(Request $request, int $id): RedirectResponse
     {
-        $this->authorizeHosxpAdmin($request);
+        $this->authorizeHomepageAdmin($request);
 
-        $bmsSession = Bms::current();
-        $hcode = Bms::hospitalCode($bmsSession, $request);
-
-        $poster = Homepage::forHospital($hcode)->findOrFail($id);
+        $poster = Homepage::forHospital($this->resolveHospitalCode($request))->findOrFail($id);
         $poster->is_active = ! $poster->is_active;
         $poster->save();
 
@@ -691,12 +591,9 @@ class HomepageController extends Controller
      */
     public function deletePoster(Request $request, int $id): RedirectResponse
     {
-        $this->authorizeHosxpAdmin($request);
+        $this->authorizeHomepageAdmin($request);
 
-        $bmsSession = Bms::current();
-        $hcode = $request->input('hcode') ?? $request->query('hcode') ?? Bms::hospitalCode($bmsSession, $request);
-
-        $poster = Homepage::forHospital($hcode)->findOrFail($id);
+        $poster = Homepage::forHospital($this->resolveHospitalCode($request))->findOrFail($id);
 
         // Delete physical file
         if ($poster->image && ! str_starts_with($poster->image, 'samples/')) {
@@ -722,11 +619,9 @@ class HomepageController extends Controller
      */
     public function updatePoster(Request $request, int $id): RedirectResponse
     {
-        $this->authorizeHosxpAdmin($request);
+        $this->authorizeHomepageAdmin($request);
 
-        $bmsSession = Bms::current();
-        $hcode = $request->input('hcode') ?? $request->query('hcode') ?? Bms::hospitalCode($bmsSession, $request);
-        $poster = Homepage::forHospital($hcode)->findOrFail($id);
+        $poster = Homepage::forHospital($this->resolveHospitalCode($request))->findOrFail($id);
 
         $validated = $request->validate([
             'title' => ['nullable', 'string', 'max:255'],
@@ -763,62 +658,12 @@ class HomepageController extends Controller
     }
 
     /**
-     * ดึงค่า bms-session-id จาก Query String หรือ Server Parameters (aopod style)
+     * Abort with 403 unless the request comes from an authorized workstation.
      */
-    protected function extractSessionId(Request $request): ?string
+    protected function authorizeHomepageAdmin(Request $request): void
     {
-        $keys = [
-            'bms-session-id',
-            'bms_session_id',
-            'sessionId',
-            'session_id',
-            'session',
-            'code',
-        ];
-
-        foreach ($keys as $k) {
-            $val = $request->query($k) ?: $request->input($k);
-            if (! empty($val) && is_string($val) && strlen(trim($val)) >= 8) {
-                return trim($val);
-            }
-        }
-
-        // Fallback: ดึงจาก QUERY_STRING ตรงๆ เผื่อโดนแปลงหรือไม่มี parameter key
-        $queryString = $request->server('QUERY_STRING', '') ?: ($_SERVER['QUERY_STRING'] ?? '');
-        if (! empty($queryString)) {
-            if (preg_match('/(?:bms[-_]session[-_]id|session_id|session|code)=([a-zA-Z0-9\-]+)/i', $queryString, $matches)) {
-                return trim($matches[1]);
-            }
-            if (preg_match('/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})/', $queryString, $matches)) {
-                return trim($matches[1]);
-            }
-        }
-
-        // Fallback: ดึงจาก Laravel Session
-        $sessionStored = session('bms_session_id');
-        if (! empty($sessionStored) && is_string($sessionStored)) {
-            return trim($sessionStored);
-        }
-
-        return null;
-    }
-
-    /**
-     * Helper to verify HOSxP Administrator authorization.
-     */
-    protected function authorizeHosxpAdmin(Request $request): void
-    {
-        $bmsSession = Bms::current();
-
-        $isAuthorized = false;
-        if ($bmsSession && Bms::isAdmin($bmsSession)) {
-            $isAuthorized = true;
-        } elseif (app()->environment('testing') || app()->environment('local')) {
-            $isAuthorized = true;
-        }
-
-        if (! $isAuthorized) {
-            abort(403, 'สิทธิ์นี้สงวนไว้สำหรับผู้ดูแลระบบ HOSxP ที่เปิดใช้งานผ่าน BMS Session เท่านั้น');
+        if (! $this->isHomepageAdmin($request)) {
+            abort(403, 'สิทธิ์นี้สงวนไว้สำหรับผู้ดูแลระบบเท่านั้น');
         }
     }
 }
