@@ -18,6 +18,8 @@ class HomepageController extends Controller
 {
     protected const DB_ERROR_MESSAGE = 'ไม่สามารถเชื่อมต่อฐานข้อมูล HOSxP';
 
+    protected const ADMIN_SESSION_KEY = 'homepage_admin';
+
     public function __construct(protected HosxpDatabase $hosxp) {}
 
     /**
@@ -100,6 +102,7 @@ class HomepageController extends Controller
             'realtimeData' => $realtimeData,
             'queueHeatmap' => $queueHeatmap,
             'canManageAdmin' => $canManageAdmin,
+            'adminName' => $canManageAdmin ? $request->session()->get(self::ADMIN_SESSION_KEY.'.name') : null,
             'adminPosters' => $adminPosters,
             'adminStats' => $adminStats,
             'dbConnected' => $dbConnected,
@@ -129,18 +132,49 @@ class HomepageController extends Controller
     }
 
     /**
-     * Poster management is limited to testing/IT workstations listed in bms.admin_ips.
+     * Poster management is limited to HOSxP administrators who signed in on this page.
      */
     protected function isHomepageAdmin(Request $request): bool
     {
-        if (app()->environment('testing')) {
-            return true;
+        return $request->session()->has(self::ADMIN_SESSION_KEY);
+    }
+
+    /**
+     * Sign in with a HOSxP login; only active members of the HOSxP "ผู้ดูแลระบบ" group are accepted.
+     */
+    public function adminLogin(Request $request): RedirectResponse
+    {
+        $credentials = $request->validate([
+            'login_name' => ['required', 'string', 'max:100'],
+            'password' => ['required', 'string', 'max:200'],
+        ]);
+
+        try {
+            $administrator = $this->hosxp->authenticateAdministrator($credentials['login_name'], $credentials['password']);
+        } catch (\Throwable $e) {
+            Log::warning('HOSxP administrator login failed: '.$e->getMessage());
+
+            return back()->withErrors(['login_name' => self::DB_ERROR_MESSAGE]);
         }
 
-        /** @var array<int, string> $allowedIps */
-        $allowedIps = config('homepage.admin_ips', []);
+        if ($administrator === null) {
+            return back()->withErrors(['login_name' => 'ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง หรือไม่ใช่ผู้ดูแลระบบ HOSxP']);
+        }
 
-        return in_array($request->ip(), $allowedIps, true);
+        $request->session()->regenerate();
+        $request->session()->put(self::ADMIN_SESSION_KEY, $administrator);
+
+        return redirect()->route('homepage.index')->with('success', "เข้าสู่ระบบผู้ดูแล: {$administrator['name']}");
+    }
+
+    /**
+     * Leave the administrator mode.
+     */
+    public function adminLogout(Request $request): RedirectResponse
+    {
+        $request->session()->forget(self::ADMIN_SESSION_KEY);
+
+        return redirect()->route('homepage.index')->with('info', 'ออกจากโหมดผู้ดูแลระบบแล้ว');
     }
 
     /**

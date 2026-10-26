@@ -17,18 +17,6 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Homepage Poster Admin
-    |--------------------------------------------------------------------------
-    |
-    | Client IPs allowed to manage posters on the homepage (comma separated in .env).
-    | Defaults to the server itself; add IT workstation IPs as needed.
-    |
-    */
-
-    'admin_ips' => array_values(array_filter(array_map('trim', explode(',', (string) env('HOMEPAGE_ADMIN_IPS', '127.0.0.1,::1'))))),
-
-    /*
-    |--------------------------------------------------------------------------
     | Homepage Ward Census
     |--------------------------------------------------------------------------
     |

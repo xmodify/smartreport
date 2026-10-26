@@ -34,6 +34,10 @@ Route::prefix('bms-homepage')->name('homepage.')->group(function () {
     Route::get('/', [BmsHomepageController::class, 'index'])->name('index');
     Route::get('/index.html', [BmsHomepageController::class, 'index']);
 
+    // HOSxP administrator sign-in (officer in group "ผู้ดูแลระบบ") to manage posters
+    Route::post('/admin/login', [BmsHomepageController::class, 'adminLogin'])->middleware('throttle:10,1')->name('admin.login');
+    Route::post('/admin/logout', [BmsHomepageController::class, 'adminLogout'])->name('admin.logout');
+
     // Real-Time OPD Queue Congestion Heatmap API
     Route::get('/queue-heatmap', [BmsHomepageController::class, 'getQueueHeatmap'])->name('queue-heatmap');
 

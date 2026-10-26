@@ -30,6 +30,36 @@ class HosxpDatabase
     }
 
     /**
+     * Verify a HOSxP login and return the officer when they are an active
+     * member of the "ผู้ดูแลระบบ" group (officer_group_id 19), otherwise null.
+     *
+     * @return array{officer_id: int, name: string}|null
+     */
+    public function authenticateAdministrator(string $loginName, string $password): ?array
+    {
+        $sql = "SELECT o.officer_id, o.officer_name, o.officer_login_password_md5
+                FROM officer o
+                JOIN officer_group_list ogl ON ogl.officer_id = o.officer_id
+                JOIN officer_group og ON og.officer_group_id = ogl.officer_group_id
+                WHERE (og.officer_group_name = 'ผู้ดูแลระบบ' OR og.officer_group_id = 19)
+                  AND o.officer_login_name = :login_name
+                  AND o.officer_active = 'Y'";
+
+        foreach ($this->select($sql, ['login_name' => $loginName], 5) as $officer) {
+            $storedHash = strtolower((string) ($officer['officer_login_password_md5'] ?? ''));
+
+            if ($storedHash !== '' && hash_equals($storedHash, md5($password))) {
+                return [
+                    'officer_id' => (int) $officer['officer_id'],
+                    'name' => (string) ($officer['officer_name'] ?? $loginName),
+                ];
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Hospital code from opdconfig.hospitalcode.
      */
     public function hospitalCode(): ?string

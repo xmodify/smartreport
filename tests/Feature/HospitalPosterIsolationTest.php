@@ -16,6 +16,7 @@ class HospitalPosterIsolationTest extends TestCase
     {
         parent::setUp();
         Storage::fake('uploads');
+        $this->withSession(['homepage_admin' => ['officer_id' => 1, 'name' => 'Admin']]);
     }
 
     /**
@@ -411,5 +412,71 @@ class HospitalPosterIsolationTest extends TestCase
                 ->where('clinicStats.is_live', false)
                 ->has('wardCensus', 3)
             );
+    }
+
+    /**
+     * Test visitors who did not sign in as HOSxP administrator cannot manage posters.
+     */
+    public function test_visitor_without_admin_sign_in_cannot_manage_posters(): void
+    {
+        $this->flushSession();
+
+        $this->get('/bms-homepage?hcode=10989')
+            ->assertInertia(fn ($page) => $page->where('canManageAdmin', false)->where('adminPosters', []));
+
+        $this->post('/bms-homepage/posters?hcode=10989', [
+            'image' => UploadedFile::fake()->image('p.jpg', 800, 1200),
+        ])->assertForbidden();
+
+        $this->assertEquals(0, Homepage::count());
+    }
+
+    /**
+     * Test an active member of the HOSxP "ผู้ดูแลระบบ" group can sign in with the HOSxP password.
+     */
+    public function test_hosxp_administrator_can_sign_in(): void
+    {
+        $this->flushSession();
+        $this->fakeHosxpDatabase(fn (string $sql): array => str_contains($sql, 'FROM officer o')
+            ? [['officer_id' => 104, 'officer_name' => 'นายทดสอบ ระบบ', 'officer_login_password_md5' => strtoupper(md5('secret-pass'))]]
+            : []);
+
+        $this->post('/bms-homepage/admin/login', ['login_name' => '1341800000000', 'password' => 'secret-pass'])
+            ->assertRedirect('/bms-homepage');
+
+        $this->get('/bms-homepage?hcode=10989')
+            ->assertInertia(fn ($page) => $page->where('canManageAdmin', true)->where('adminName', 'นายทดสอบ ระบบ'));
+
+        $this->post('/bms-homepage/admin/logout')->assertRedirect('/bms-homepage');
+
+        $this->get('/bms-homepage?hcode=10989')
+            ->assertInertia(fn ($page) => $page->where('canManageAdmin', false));
+    }
+
+    /**
+     * Test a wrong password is rejected.
+     */
+    public function test_sign_in_is_rejected_for_wrong_password(): void
+    {
+        $this->flushSession();
+        $this->fakeHosxpDatabase(fn (): array => [['officer_id' => 104, 'officer_name' => 'A', 'officer_login_password_md5' => md5('right')]]);
+
+        $this->post('/bms-homepage/admin/login', ['login_name' => 'admin', 'password' => 'wrong'])
+            ->assertSessionHasErrors('login_name');
+
+        $this->get('/bms-homepage?hcode=10989')
+            ->assertInertia(fn ($page) => $page->where('canManageAdmin', false));
+    }
+
+    /**
+     * Test officers outside the administrator group are rejected (query returns no rows).
+     */
+    public function test_sign_in_is_rejected_for_non_administrator(): void
+    {
+        $this->flushSession();
+        $this->fakeHosxpDatabase(fn (): array => []);
+
+        $this->post('/bms-homepage/admin/login', ['login_name' => 'nurse', 'password' => 'right'])
+            ->assertSessionHasErrors('login_name');
     }
 }

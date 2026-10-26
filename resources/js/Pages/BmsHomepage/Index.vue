@@ -1,8 +1,9 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed } from 'vue';
-import { Head, Link } from '@inertiajs/vue3';
+import { Head, Link, router } from '@inertiajs/vue3';
 import { appPath } from '../../helpers';
 import PosterManagerModal from './Components/PosterManagerModal.vue';
+import AdminLoginModal from './Components/AdminLoginModal.vue';
 import ClinicWorkloadCard from './Components/ClinicWorkloadCard.vue';
 import { 
   Building2, 
@@ -73,6 +74,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  adminName: {
+    type: String,
+    default: null,
+  },
   adminPosters: {
     type: Array,
     default: () => [],
@@ -102,6 +107,13 @@ const isFullscreen = ref(false);
 
 // HOSxP Admin Poster Manager Modal State
 const isPosterManagerOpen = ref(false);
+
+// HOSxP Administrator Login Modal State
+const isAdminLoginOpen = ref(false);
+
+const adminLogout = () => {
+  router.post(appPath('/bms-homepage/admin/logout'), {}, { preserveScroll: true });
+};
 
 const currentPoster = computed(() => {
   if (!props.posters || props.posters.length === 0) return null;
@@ -279,6 +291,27 @@ onUnmounted(() => {
             </button>
 
             <button
+              v-if="canManageAdmin"
+              type="button"
+              @click="adminLogout"
+              class="p-1 px-1.5 rounded bg-white hover:bg-[#e4eef7] border border-[#adc5de] text-[#17538d] text-[11px] font-semibold transition-colors cursor-pointer mr-1"
+              :title="adminName ? `ผู้ดูแล: ${adminName} (คลิกเพื่อออกจากโหมดผู้ดูแล)` : 'ออกจากโหมดผู้ดูแล'"
+            >
+              ออกจากโหมดผู้ดูแล
+            </button>
+
+            <!-- Sign in as HOSxP administrator -->
+            <button
+              v-else
+              type="button"
+              @click="isAdminLoginOpen = true"
+              class="p-1 rounded bg-white hover:bg-[#e4eef7] border border-[#adc5de] text-[#17538d] transition-colors cursor-pointer mr-1"
+              title="เข้าสู่ระบบผู้ดูแลระบบ HOSxP เพื่อจัดการโปสเตอร์"
+            >
+              <Settings class="w-3 h-3" />
+            </button>
+
+            <button
               type="button"
               @click="toggleAutoPlay"
               class="p-1 rounded bg-white hover:bg-[#e4eef7] border border-[#adc5de] text-[#17538d] transition-colors cursor-pointer"
@@ -411,6 +444,12 @@ onUnmounted(() => {
       :hospital-name="hospitalName"
       :stats="adminStats || { total: posters.length, max: 8, remaining: 8 - posters.length }"
       @close="isPosterManagerOpen = false"
+    />
+
+
+    <AdminLoginModal
+      :is-open="isAdminLoginOpen"
+      @close="isAdminLoginOpen = false"
     />
 
   </div>
