@@ -1,7 +1,8 @@
 <script setup>
 import { ref, watch, computed } from 'vue';
 import { appPath } from '../../../helpers';
-import { CalendarDays, CalendarX2, Calendar, Filter, Stethoscope, X, RefreshCw } from 'lucide-vue-next';
+import ThaiDateControls from './ThaiDateControls.vue';
+import { CalendarDays, CalendarX2, Filter, Stethoscope, X } from 'lucide-vue-next';
 
 const props = defineProps({
   isOpen: {
@@ -19,7 +20,6 @@ const emit = defineEmits(['close']);
 const data = ref(props.initialData);
 const isLoading = ref(false);
 const loadError = ref(null);
-const dateInput = ref(null);
 const selectedDoctors = ref({});
 
 const clinics = computed(() => data.value?.clinics || []);
@@ -66,14 +66,6 @@ const loadData = async (date) => {
   }
 };
 
-const onDateChange = (event) => {
-  if (event.target.value) loadData(event.target.value);
-};
-
-const openDatePicker = () => {
-  dateInput.value?.showPicker?.();
-};
-
 watch(() => props.isOpen, (open) => {
   if (open) {
     data.value = props.initialData;
@@ -89,9 +81,9 @@ watch(() => props.isOpen, (open) => {
     class="fixed inset-0 z-50 flex items-start justify-center bg-slate-900/50 p-2 sm:p-6 overflow-y-auto"
     @click.self="emit('close')"
   >
-    <div class="w-full max-w-5xl bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden my-auto">
+    <div class="w-full max-w-5xl bg-white rounded-2xl shadow-2xl border border-slate-200 my-auto">
       <!-- Header -->
-      <div class="bg-gradient-to-br from-[#1e3a8a] to-[#3b82f6] text-white px-5 py-4 flex flex-wrap items-center justify-between gap-3">
+      <div class="bg-gradient-to-br from-[#1e3a8a] to-[#3b82f6] text-white px-5 py-4 rounded-t-2xl flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 class="text-lg font-extrabold flex items-center gap-2">
             <CalendarDays class="w-5 h-5 text-blue-300" />
@@ -104,32 +96,12 @@ watch(() => props.isOpen, (open) => {
 
         <div class="flex items-center gap-2">
           <label class="text-xs font-semibold whitespace-nowrap">เลือกวันที่นัด:</label>
-          <div class="relative">
-            <button
-              type="button"
-              class="flex items-center gap-2 bg-white text-slate-800 text-xs font-semibold rounded-lg px-3 py-1.5 shadow-sm cursor-pointer min-w-36"
-              @click="openDatePicker"
-            >
-              <Calendar class="w-3.5 h-3.5 text-blue-600" />
-              <span>{{ thaiDate }}</span>
-            </button>
-            <input
-              ref="dateInput"
-              type="date"
-              :value="data?.selected_date"
-              class="absolute inset-0 opacity-0 pointer-events-none"
-              tabindex="-1"
-              @change="onDateChange"
-            />
-          </div>
-          <button
-            type="button"
-            class="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 cursor-pointer"
-            title="รีเฟรช"
-            @click="loadData(data?.selected_date)"
-          >
-            <RefreshCw class="w-3.5 h-3.5" :class="{ 'animate-spin': isLoading }" />
-          </button>
+          <ThaiDateControls
+            :model-value="data?.selected_date || ''"
+            :loading="isLoading"
+            @update:model-value="loadData"
+            @refresh="loadData(data?.selected_date)"
+          />
           <button
             type="button"
             class="p-1.5 rounded-lg bg-white/20 hover:bg-white/30 cursor-pointer"
@@ -154,7 +126,7 @@ watch(() => props.isOpen, (open) => {
       </div>
 
       <!-- Clinic cards -->
-      <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-4 sm:p-5 bg-slate-50 max-h-[70vh] overflow-y-auto">
+      <div v-else class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 p-4 sm:p-5 bg-slate-50 rounded-b-2xl max-h-[70vh] overflow-y-auto">
         <div
           v-for="(clinic, index) in clinics"
           :key="clinic.name"
